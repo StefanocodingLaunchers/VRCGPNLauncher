@@ -1,38 +1,84 @@
 name: Build
 
-on: push
+on:
+  push:
+    tags:
+      - 'v*'
 
 jobs:
-  release:
+  build:
     runs-on: ${{ matrix.os }}
-
-    permissions:
-      contents: write
+    needs: release
 
     strategy:
       matrix:
         os: [macos-latest, ubuntu-latest, windows-latest]
 
     steps:
-      - name: Check out Git repository
+      - name: Checkout code
         uses: actions/checkout@v3
+        with:
+            fetch-depth: 0
 
-      - name: Set up Node
-        uses: actions/setup-node@v3
+      - name: Checkout the commit from release job
+        run: |
+          git fetch origin ${{ needs.release.outputs.commit_sha }} --depth=1
+          git checkout ${{ needs.release.outputs.commit_sha }}
+
+      - name: Install Node.js, NPM and Yarn
+        uses: actions/setup-node@v1
         with:
           node-version: 20
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
+      - name: Build/release Electron app
+        uses: samuelmeuli/action-electron-builder@v1
         with:
-          python-version: 3.x
+          github_token: ${{ secrets.github_token }}
+          release: true
+    
+  release:
+    runs-on: ubuntu-latest
 
-      - name: Install Dependencies
-        run: npm ci
-        shell: bash
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
 
-      - name: Build
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npm run dist
-        shell: bash
+    outputs:
+      commit_sha: ${{ steps.update_version.outputs.commit_sha }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Write release version
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          echo Version: $VERSION
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+
+      - name: Update package.json version
+        uses: jossef/action-set-json-field@v2.1
+        with:
+          file: package.json
+          field: version
+          value: ${{ env.VERSION }}
+      
+      - name: Commit files
+        id: update_version
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add -A
+          git commit -m "🏷️ bumping release ${{ env.VERSION }}"
+          echo "::set-output name=commit_sha::$(git rev-parse HEAD)"
+          
+      - name: Push changes
+        uses: ad-m/github-push-action@v0.6.0
+        with:
+          github_token: ${{ github.token }}
+
+      - name: Github Automatic Release
+        uses: "marvinpinto/action-automatic-releases@latest"
+        with:
+          draft: true
+          repo_token: "${{ secrets.GITHUB_TOKEN }}"
+          prerelease: false
